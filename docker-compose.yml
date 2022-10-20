@@ -1,0 +1,142 @@
+version: '2'
+services:
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: example
+      POSTGRES_USER: example
+    ports:
+      - 5432:5432
+#Grafana and Prometheus
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8080:8080
+  postgres-exporter:
+    image: wrouesnel/postgres_exporter:latest
+    deploy:
+      mode: replicated
+      replicas: 1
+    environment:
+      DATA_SOURCE_NAME: "postgresql://example:example@db:5432/example?sslmode=disable"
+    ports:
+      - 9187:9187
+  prometheus:
+     image: prom/prometheus:latest
+     restart: unless-stopped
+     volumes:
+       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+     command:
+       - '--config.file=/etc/prometheus/prometheus.yml'
+       - '--storage.tsdb.path=/prometheus'
+       - '--web.console.libraries=/etc/prometheus/console_libraries'
+       - '--web.console.templates=/etc/prometheus/consoles'
+       - '--web.enable-lifecycle'
+     ports:
+       - 9090:9090
+  grafana:
+    image: grafana/grafana
+    depends_on:
+      - db
+      - postgres-exporter
+    ports:
+      - 3000:3000
+#Zabbix All in One
+  zabbix-server:
+     container_name: zabbix-server
+     image: zabbix/zabbix-server-pgsql
+     environment:
+       TZ: "Europe/Moscow"
+       DB_SERVER_HOST: db
+       POSTGRES_USER: example
+       POSTGRES_PASSWORD: example
+       POSTGRES_DB: example
+       ZBX_JAVAGATEWAY : zabbix-java
+     depends_on:
+       - db
+  zabbix-web-interface: 
+     container_name: zabbix-interface
+     image: zabbix/zabbix-web-apache-pgsql
+     environment:
+       TZ: "Europe/Moscow"
+       DB_SERVER_HOST: db
+       POSTGRES_USER: example
+       POSTGRES_PASSWORD: example
+       POSTGRES_DB: example
+       ZBX_HOSTNAME: Zabbix server
+       ZBX_SERVER_HOST: zabbix-server
+     ports:
+       - 80:8080
+       - 8443:8443
+     depends_on:
+       - db
+       - zabbix-server
+  zabbix-java:
+     container_name: zabbix-java
+     image: zabbix/zabbix-java-gateway:alpine-6.0-latest
+     ports:
+       - 10052:10052
+  zabbix-agent:
+     container_name: zabbix-agent
+     image: zabbix/zabbix-agent2
+     privileged: true
+     environment:
+       TZ: "Europe/Moscow"
+       ZBX_SERVER_HOST: zabbix-server
+       DB_SERVER_HOST: db
+       POSTGRES_USER: example
+       POSTGRES_PASSWORD: example
+       POSTGRES_DB: example
+       ZBX_HOSTNAME: Zabbix server
+     links:
+       - "zabbix-server:zabbix-server"
+     depends_on:
+       - zabbix-server
+       - db
+#GrayLog metric from Spring
+  # MongoDB: https://hub.docker.com/_/mongo/
+  mongodb:
+    image: mongo:3
+  # Elasticsearch: https://www.elastic.co/guide/en/elasticsearch/reference/5.6/docker.html
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:5.6.3
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      # Disable X-Pack security: https://www.elastic.co/guide/en/elasticsearch/reference/5.6/security-settings.html#general-security-settings
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 1g
+  # Graylog: https://hub.docker.com/r/graylog/graylog/
+  graylog:
+    image: graylog/graylog:2.4.0-1
+    environment:
+      # CHANGE ME!
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+      # Password: admin
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_WEB_ENDPOINT_URI=http://127.0.0.1:9000/api
+    links:
+      - mongodb:mongo
+      - elasticsearch
+    depends_on:
+      - mongodb
+      - elasticsearch
+    ports:
+      # Graylog web interface and REST API
+      - 9000:9000
+      # Syslog TCP
+      - 514:514
+      # Syslog UDP
+      - 514:514/udp
+      # GELF TCP
+      - 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
